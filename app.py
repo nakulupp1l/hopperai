@@ -122,7 +122,7 @@ def log_to_sheets_bridge(data):
 # --- 5. SIDEBAR (CONTROLS) ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/1087/1087815.png", width=80)
-    st.title("HopperAI v1.5")
+    st.title("HopperAI v1.6")
     
     if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
         st.caption("🔴 Database Connected")
@@ -131,12 +131,12 @@ with st.sidebar:
         
     st.markdown("---")
     st.subheader("📥 Material Inputs")
-    density = st.number_input("Bulk Density (kg/m³)", 200.0, 3000.0, 850.0)
+    bulk_rho = st.number_input("Bulk Density (kg/m³)", 200.0, 3000.0, 850.0)
     
-    # NEW: Added Tapped Density to calculate Hausner Ratio
-    t_density = st.number_input("Tapped Density (kg/m³)", density, 4000.0, density * 1.2)
-    h_ratio = t_density / density
-    st.info(f"Hausner Ratio: **{h_ratio:.3f}**")
+    # REQUIRED: Tapped Density is needed to compute Hausner Ratio for the AI brain
+    tapped_rho = st.number_input("Tapped Density (kg/m³)", bulk_rho, 4000.0, bulk_rho * 1.2)
+    h_ratio = tapped_rho / bulk_rho
+    st.info(f"Calculated Hausner Ratio: **{h_ratio:.3f}**")
     
     d50 = st.number_input("Particle Size (µm)", 1.0, 5000.0, 75.0)
     shape = st.selectbox("Particle Shape", ["Irregular", "Spherical", "Angular", "Granular"])
@@ -150,13 +150,17 @@ st.markdown("Predictive Modeling for Mass and Funnel Flow Characteristics.")
 
 if generate_btn:
     if clf and regs:
-        # THE FIX: Columns must include Hausner Ratio and match the Trainer's 'input_cols'
-        input_df = pd.DataFrame([[density, h_ratio, d50, shape]], 
+        # Columns must match the Trainer's 'input_cols' exactly
+        input_df = pd.DataFrame([[bulk_rho, h_ratio, d50, shape]], 
                                 columns=["Bulk Density - ρb (kg/m3)", "Hausner Ratio", "d50 (µm)", "Shape"])
         
         try:
+            # Predict Flowability Class
             flow_status = clf.predict(input_df)[0]
-            results = {col: model.predict(input_df)[0] for col, model in regs.items()}
+            
+            # Predict all Numerical Design Outputs
+            # Standardize keys by stripping spaces
+            results = {str(col).strip(): model.predict(input_df)[0] for col, model in regs.items()}
 
             # --- HERO SECTION: Flowability ---
             st.markdown(f"""
@@ -169,45 +173,53 @@ if generate_btn:
 
             # --- TECHNICAL DIMENSIONS GRID ---
             col1, col2 = st.columns(2)
+            
             with col1:
                 st.markdown('<p class="section-header">💠 Mass Flow (Conical)</p>', unsafe_allow_html=True)
+                val_angle = results.get('Half Angle (°)', 0)
+                val_outlet = results.get('Outlet Dimension NB', 0)
+                
                 st.markdown(f"""
                     <div class="metric-container">
                         <div class="metric-label">Recommended Half Angle</div>
-                        <div class="metric-value">{results.get('Half Angle (°)', 0):.1f}°</div>
+                        <div class="metric-value">{val_angle:.1f}°</div>
                     </div>
                     <div class="metric-container">
                         <div class="metric-label">Outlet Dimension (NB)</div>
-                        <div class="metric-value">{int(results.get('Outlet Dimension NB', 0))}</div>
+                        <div class="metric-value">{int(val_outlet)}</div>
                     </div>
                 """, unsafe_allow_html=True)
 
             with col2:
                 st.markdown('<p class="section-header">📐 Funnel Flow (Plane)</p>', unsafe_allow_html=True)
+                val_plane_angle = results.get('Half Angle (°).1', 0)
+                val_valley = results.get('Valley Angle - External (°)', 0)
+                val_plane_outlet = results.get('Outlet Dimension NB.1', 0)
+                
                 st.markdown(f"""
                     <div class="metric-container">
                         <div class="metric-label">Recommended Half Angle</div>
-                        <div class="metric-value">{results.get('Half Angle (°).1', 0):.1f}°</div>
+                        <div class="metric-value">{val_plane_angle:.1f}°</div>
                     </div>
                     <div class="metric-container">
                         <div class="metric-label">Valley Angle (External)</div>
-                        <div class="metric-value">{results.get('Valley Angle - External (°)', 0):.1f}°</div>
+                        <div class="metric-value">{val_valley:.1f}°</div>
                     </div>
                     <div class="metric-container">
                         <div class="metric-label">Outlet Dimension (NB)</div>
-                        <div class="metric-value">{int(results.get('Outlet Dimension NB.1', 0))}</div>
+                        <div class="metric-value">{int(val_plane_outlet)}</div>
                     </div>
                 """, unsafe_allow_html=True)
             
             # --- LOGGING TO GOOGLE SHEETS ---
             log_data = {
                 "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Density": density, "Hausner": round(h_ratio, 3), "Size": d50, "Shape": shape, "Flow": flow_status,
-                "Mass_Angle": round(float(results.get('Half Angle (°)', 0)), 2),
-                "Mass_Outlet": int(results.get('Outlet Dimension NB', 0)),
-                "Funnel_Angle": round(float(results.get('Half Angle (°).1', 0)), 2),
-                "Valley_Angle": round(float(results.get('Valley Angle - External (°)', 0)), 2),
-                "Funnel_Outlet": int(results.get('Outlet Dimension NB.1', 0))
+                "Density": bulk_rho, "Hausner": round(h_ratio, 3), "Size": d50, "Shape": shape, "Flow": flow_status,
+                "Mass_Angle": round(float(val_angle), 2),
+                "Mass_Outlet": int(val_outlet),
+                "Funnel_Angle": round(float(val_plane_angle), 2),
+                "Valley_Angle": round(float(val_valley), 2),
+                "Funnel_Outlet": int(val_plane_outlet)
             }
             
             log_success, log_msg = log_to_sheets_bridge(log_data)
@@ -220,12 +232,15 @@ if generate_btn:
         st.write("---")
         report_df = pd.DataFrame({"Parameter": list(log_data.keys()), "Value": list(log_data.values())})
         csv_data = report_df.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download Specification Report (CSV)", data=csv_data, 
-                           file_name=f"hopper_specs_{datetime.date.today()}.csv", mime="text/csv")
+        st.download_button(
+            label="⬇️ Download Specification Report (CSV)",
+            data=csv_data,
+            file_name=f"hopper_specs_{datetime.date.today()}.csv",
+            mime="text/csv"
+        )
             
     else:
         st.error("System Error: AI Model Files Not Found.")
 else:
     st.divider()
-    
     st.info("💡 Adjust the material properties in the sidebar and click **CALCULATE & LOG DESIGN** to begin.")
